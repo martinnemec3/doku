@@ -1,0 +1,690 @@
+
+<!DOCTYPE html>
+<html>
+  <head>
+    <script src="https://unpkg.com/konva@6.0.0/konva.min.js"></script>
+    <meta charset="utf-8" />
+    <title>Konva Drag and Drop Demo</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+		text-align: center;
+      }
+	  #myCanvas {
+		border: 1px solid black;
+		background-color: #f0f0f0;
+		margin-left: auto;
+		margin-right: auto;
+	  }
+    </style>
+  </head>
+  <body>
+    <canvas id="myCanvas" width="720" height="620"></canvas>
+    <script>
+		const TILE_SIZE = 40;
+
+		var canvas = document.getElementById("myCanvas");
+		var pitch;
+		var shapes;
+		var moving;
+		var points = 0;
+		var fadingElements;
+		var interval;
+
+		canvas.addEventListener("mousedown",mousedown);
+
+		newPitch();
+		newShapes();
+		redraw();
+
+		function mousedown(e){
+			canvas.addEventListener("mousemove", mousemove);
+			canvas.addEventListener("mouseup", mouseup);
+
+			moving[0] = isPositionMatchingShape(e.offsetX, e.offsetY, 0);
+			moving[1] = isPositionMatchingShape(e.offsetX, e.offsetY, 1);
+			moving[2] = isPositionMatchingShape(e.offsetX, e.offsetY, 2);
+
+			/*//...calc coords into mouseX, mouseY
+			for(i=circArray.length; i>=0; i--){ //loop in reverse draw order
+				dx = mouseX - circArray[i].x;
+				dy = mouseY - circArray[i].y;
+				if (Math.sqrt((dx*dx) + (dy*dy)) < circArray[i].r) {         
+					//we've hit an item
+					dragIdx = i; //store the item being dragged
+					dragOffsetX = dx; //store offsets so item doesn't 'jump'
+					dragOffsetY = dy;
+					canvas.addEventListener("mousemove",mousemove); //start dragging
+					canvas.addEventListener("mouseup",mouseup);
+					return;
+				}
+			}*/
+		}
+
+		function mousemove(e) {
+			redraw(e);
+		}
+
+		function mouseup(e) {
+			canvas.removeEventListener("mouseup", mouseup);
+			canvas.removeEventListener("mousemove", mousemove);
+
+			let candidates = getCandidatePitchPieces(e);
+			let newTiles = 0;
+			for (let x = 0; x < pitch.length; x++) {
+				for (let y = 0; y < pitch[x].length; y++) {
+					if (candidates[x][y]) {
+						pitch[x][y] = true;
+						newTiles++;
+					}
+				}
+			}
+			if (newTiles > 0) {
+				let position = getMovingShapePosition();
+				shapes[position] = undefined;
+				points += newTiles;
+			}
+			moving = [undefined, undefined, undefined];
+
+			removeCandidates = getRemoveCandidates(pitch);
+			startFading(removeCandidates);
+
+			for (let x = 0; x < pitch.length; x++) {
+				for (let y = 0; y < pitch[x].length; y++) {
+					pitch[x][y] = pitch[x][y] ^ removeCandidates[x][y];
+				}
+			}
+
+			if (!shapes[0] && !shapes[1] && !shapes[2]) {
+				newShapes();
+			}
+			redraw();
+		}
+
+		function startFading(removeCandidates) {
+			fadingElements = removeCandidates;
+			interval = setInterval(function() {
+				changed = false;
+				for (let x = 0; x < pitch.length; x++) {
+					for (let y = 0; y < pitch[x].length; y++) {
+						if (fadingElements[x][y] > 0) {
+							fadingElements[x][y] -= 0.10;
+							changed = true;
+						}
+					}
+				}
+				if (!changed) {
+					clearInterval(interval);
+					fadingElements = undefined;
+				}
+				redraw();
+			}, 40);
+		}
+
+		function redraw(moveEvent) {
+			var ctx = canvas.getContext("2d");
+			ctx.clearRect(0, 0, canvas.width, canvas.height);
+			drawPitch(pitch, moveEvent);
+			drawShape(shapes[0], 0, moveEvent);
+			drawShape(shapes[1], 1, moveEvent);
+			drawShape(shapes[2], 2, moveEvent);
+			printPoints(points, ctx)
+		}
+
+		function getRemoveCandidates(inputPitch) {
+			let candidates = generatePitchData();
+			// check rows and cols
+			for (let index = 0; index < inputPitch.length; index++) {
+				let row = true;
+				let col = true;
+				for (let element = 0; element < inputPitch[index].length; element++) {
+					row = row && inputPitch[index][element];
+					col = col && inputPitch[element][index];
+				}
+				for (let element = 0; element < pitch[index].length; element++) {
+					candidates[index][element] = candidates[index][element] || row;
+					candidates[element][index] = candidates[element][index] || col;
+				}
+			}
+			
+			for (let block = 0; block < 9; block++) {
+				let startX = 3 * Math.floor(block/3)
+				let startY = 3 * Math.round(block%3);
+				let filled = true;
+				for (let x = startX; x < startX + 3; x++) {
+					for (let y = startY; y < startY + 3; y++) {
+						filled = filled && inputPitch[x][y];
+					}
+				}
+				for (let x = startX; x < startX + 3; x++) {
+					for (let y = startY; y < startY + 3; y++) {
+						candidates[x][y] = candidates[x][y] || filled;
+					}
+				}
+			}
+			return candidates;
+		}
+
+		function isPositionMatchingShape(x, y, position) {
+			if (!shapes[position]) {
+				return undefined;
+			}
+			let shapeX = getLeftTopCornerX(position);
+			let shapeY = getLeftTopCornerY(position);
+			for (let i = 0; i < shapes[position].length; i++) {
+				for (let j = 0; j < shapes[position][i].length; j++) {
+					tileX = shapeX + i*TILE_SIZE;
+					tileY = shapeY + j*TILE_SIZE;
+					if (shapes[position][i][j] && x - tileX > 0 && x - tileX < TILE_SIZE && y - tileY > 0 && y - tileY < TILE_SIZE) {
+						return [x - shapeX, y - shapeY];
+					}
+				}
+			}
+			return undefined;
+		}
+
+		function newPitch() {
+			pitch = [
+				[0, 0, 0, 0, 0, 0, 0, 0, 0],
+				[0, 0, 0, 0, 0, 0, 0, 0, 0],
+				[0, 0, 0, 0, 0, 0, 0, 0, 0],
+				[0, 0, 0, 0, 0, 0, 0, 0, 0],
+				[0, 0, 0, 0, 0, 0, 0, 0, 0],
+				[0, 0, 0, 0, 0, 0, 0, 0, 0],
+				[0, 0, 0, 0, 0, 0, 0, 0, 0],
+				[0, 0, 0, 0, 0, 0, 0, 0, 0],
+				[0, 0, 0, 0, 0, 0, 0, 0, 0]
+			]
+		}
+
+		function newShapes() {
+			shapes = [generateShape(), generateShape(), generateShape()];
+			moving = [undefined, undefined, undefined];
+		}
+
+
+		function drawShape(shape, position, moveEvent) {
+			let startX = getLeftTopCornerX(position);
+			let startY = getLeftTopCornerY(position);
+			if (isShapeBased(position)) {
+				for (let i = 0; i < shape.length; i++) {
+					for (let j = 0; j < shape[i].length; j++) {
+						if (shape[i][j]) {
+							drawRectangle(startX + i*TILE_SIZE, startY + j*TILE_SIZE, TILE_SIZE, TILE_SIZE, true, "#5bc0de", 1);
+						} else {
+							//drawRectangle(startX + i*TILE_SIZE, startY + j*TILE_SIZE, TILE_SIZE, TILE_SIZE, false, "#000000", 1);
+						}
+					}
+				}
+			} else if (!!moving[position]) {
+				for (let i = 0; i < shape.length; i++) {
+					for (let j = 0; j < shape[i].length; j++) {
+						let coordX = moveEvent.offsetX + i*TILE_SIZE - moving[position][0];
+						let coordY = moveEvent.offsetY + j*TILE_SIZE - moving[position][1];
+						if (shape[i][j]) {
+							drawRectangle(coordX, coordY, TILE_SIZE, TILE_SIZE, true, "#000000", 0.3);
+						} else {
+							//drawRectangle(coordX, coordY, TILE_SIZE, TILE_SIZE, false, "#000000", 1);
+						}
+					}
+				}
+			}
+		}
+
+		function getLeftTopCornerX (position) {
+			return TILE_SIZE/2 + (position * (TILE_SIZE * 6));
+		}
+
+		function getLeftTopCornerY(position) {
+			return TILE_SIZE * 10;
+		}
+
+		function isShapeBased(position) {
+			return !!shapes[position] && !moving[position];
+		}
+
+		function drawPitch(pitch, moveEvent) {
+			var ctx = canvas.getContext("2d");
+			let dropCandidates = getCandidatePitchPieces(moveEvent);
+			let removeCandidatePieces = getRemoveCandidatesFromEvent(dropCandidates, moveEvent);
+			for (let x = 0; x < pitch.length; x++) {
+				for (let y = 0; y < pitch[x].length; y++) {
+					if (removeCandidatePieces[x][y])
+						drawPitchPiece(x, y, 'removeCandidate', ctx);
+					else if (pitch[x][y])
+						drawPitchPiece(x, y, 'settled', ctx);
+					else if (dropCandidates[x][y])
+						drawPitchPiece(x, y, 'candidate', ctx);
+					else if (fadingElements && fadingElements[x][y] > 0)
+						drawPitchPiece(x, y, 'fading', ctx);
+					else
+						drawPitchPiece(x, y, 'empty', ctx);
+				}
+			}
+			drawPitchFrames(ctx);
+		}
+
+		function getRemoveCandidatesFromEvent(dropCandidates, moveEvent) {
+			let removeCandidatesPitch = generatePitchData();
+			let newTiles = 0;
+			for (let x = 0; x < pitch.length; x++) {
+				for (let y = 0; y < pitch[x].length; y++) {
+					removeCandidatesPitch[x][y] = dropCandidates[x][y] || pitch[x][y];
+				}
+			}
+			return getRemoveCandidates(removeCandidatesPitch);
+		}
+
+		function getCandidatePitchPieces(moveEvent) {
+			let candidates = generatePitchData();
+			let position = getMovingShapePosition();
+			if (!moveEvent || typeof position !== 'number') return candidates;
+
+			shapeX = getMovingShapeX(moveEvent, position);
+			shapeY = getMovingShapeY(moveEvent, position);
+
+			startX = Math.round((shapeX - getPitchLeftTopCornerX()) / TILE_SIZE);
+			startY = Math.round((shapeY - getPitchLeftTopCornerY()) / TILE_SIZE);
+
+			for (let indexX = 0; indexX < 5; indexX++) {
+				for (let indexY = 0; indexY <  5; indexY++) {
+					if (shapes[position][indexX][indexY]) {
+						if (startX + indexX >= 0 && startX + indexX < pitch.length &&
+							startY + indexY >= 0 && startY + indexY < pitch[0].length &&
+							!pitch[startX + indexX][startY + indexY]) {
+							candidates[startX + indexX][startY + indexY] = true;
+						} else {
+							return generatePitchData();
+						}
+					}
+				}
+			}
+			return candidates;
+		}
+
+		function generatePitchData() {
+			return [
+				[false, false, false, false, false, false, false, false, false],
+				[false, false, false, false, false, false, false, false, false],
+				[false, false, false, false, false, false, false, false, false],
+				[false, false, false, false, false, false, false, false, false],
+				[false, false, false, false, false, false, false, false, false],
+				[false, false, false, false, false, false, false, false, false],
+				[false, false, false, false, false, false, false, false, false],
+				[false, false, false, false, false, false, false, false, false],
+				[false, false, false, false, false, false, false, false, false]
+			]
+		}
+
+		function getMovingShapeX(moveEvent, position) {
+			return moveEvent.offsetX - moving[position][0];
+		}
+
+		function getMovingShapeY(moveEvent, position) {
+			return moveEvent.offsetY - moving[position][1];
+		}
+
+		function getMovingShapePosition() {
+			if (!!moving[0]) {
+				return 0;
+			} else if (!!moving[1]) {
+				return 1;
+			} else if (!!moving[2]) {
+				return 2;
+			}
+			return undefined;
+		}
+
+		function drawPitchPiece(x, y, state, ctx) {
+			let pitchX = getPitchLeftTopCornerX();
+			let pitchY = getPitchLeftTopCornerY();
+			if (state === 'empty') {
+				drawRectangle(pitchX + x*TILE_SIZE, pitchY + y*TILE_SIZE, TILE_SIZE, TILE_SIZE, false, "#AAAAAA", 1, ctx);
+			} else if (state === 'settled') {
+				drawRectangle(pitchX + x*TILE_SIZE, pitchY + y*TILE_SIZE, TILE_SIZE, TILE_SIZE, true, "#007bff", 1, ctx);
+			} else if (state === 'candidate') {
+				drawRectangle(pitchX + x*TILE_SIZE, pitchY + y*TILE_SIZE, TILE_SIZE, TILE_SIZE, true, "#000000", 0.3, ctx);
+			} else if (state === 'removeCandidate') {
+				drawRectangle(pitchX + x*TILE_SIZE, pitchY + y*TILE_SIZE, TILE_SIZE, TILE_SIZE, true, "#0000FF", 0.3, ctx);
+			} else if (state === 'fading') {
+				drawRectangle(pitchX + x*TILE_SIZE, pitchY + y*TILE_SIZE, TILE_SIZE, TILE_SIZE, true, "#007bff", fadingElements[x][y], ctx);
+			}
+		}
+
+		function drawPitchFrames(ctx) {
+			let pitchX = getPitchLeftTopCornerX();
+			let pitchY = getPitchLeftTopCornerY();
+			drawLine(pitchX, pitchY, pitchX, pitchY + 9*TILE_SIZE, "#333333", ctx);
+			drawLine(pitchX + 3*TILE_SIZE, pitchY, pitchX + 3*TILE_SIZE, pitchY + 9*TILE_SIZE, "#333333", ctx);
+			drawLine(pitchX + 6*TILE_SIZE, pitchY, pitchX + 6*TILE_SIZE, pitchY + 9*TILE_SIZE, "#333333", ctx);
+			drawLine(pitchX + 9*TILE_SIZE, pitchY, pitchX + 9*TILE_SIZE, pitchY + 9*TILE_SIZE, "#333333", ctx);
+			drawLine(pitchX, pitchY, pitchX + 9*TILE_SIZE, pitchY, "#333333", ctx);
+			drawLine(pitchX, pitchY + 3*TILE_SIZE, pitchX + 9*TILE_SIZE, pitchY + 3*TILE_SIZE, "#333333", ctx);
+			drawLine(pitchX, pitchY + 6*TILE_SIZE, pitchX + 9*TILE_SIZE, pitchY + 6*TILE_SIZE, "#333333", ctx);
+			drawLine(pitchX, pitchY + 9*TILE_SIZE, pitchX + 9*TILE_SIZE, pitchY + 9*TILE_SIZE, "#333333", ctx);
+		}
+
+		function getPitchLeftTopCornerX() {
+			return 180;
+		}
+
+		function getPitchLeftTopCornerY() {
+			return 20;
+		}
+
+		function drawRectangle(x, y, width, height, fill, color, alpha, ctx) {
+			let context = ctx;
+			if (!context) {
+				context = canvas.getContext("2d");
+			}
+			context.beginPath();
+			context.globalAlpha = alpha;
+			if (fill) {
+				context.fillStyle = color;
+				context.fillRect(x, y, width, height);
+			}
+			context.strokeStyle = color;
+			context.rect(x, y, width, height);
+			context.globalAlpha = 1.0;
+			context.stroke();
+		}
+
+		function drawLine(startX, startY, endX, endY, color, ctx) {
+			let context = ctx;
+			if (!context) {
+				context = canvas.getContext("2d");
+			}
+			context.beginPath();
+			context.strokeStyle = color;
+			context.moveTo(startX, startY);
+			context.lineTo(endX, endY);
+			context.stroke();
+		}
+
+		function printPoints(points, ctx) {
+			let context = ctx;
+			if (!context) {
+				context = canvas.getContext("2d");
+			}
+			ctx.font = "30px Arial";
+			context.fillStyle = "#000000";
+			ctx.fillText("Points: " + points, 10, 50);
+		}
+
+		function generateShape() {
+			let options = [
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+					[0, 0, 1, 1, 0],
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 0, 1, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 1, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+					[0, 0, 1, 1, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+					[0, 1, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 1, 1, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 1, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+					[0, 1, 1, 1, 0],
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 1, 0],
+					[0, 0, 1, 0, 0],
+					[0, 1, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 1, 0, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 0, 1, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 1, 0],
+					[0, 1, 1, 1, 0],
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 1, 0, 0, 0],
+					[0, 1, 1, 1, 0],
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+					[0, 1, 1, 1, 0],
+					[0, 1, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+					[0, 1, 1, 1, 0],
+					[0, 0, 0, 1, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 1, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 1, 1, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 1, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 1, 1, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+					[0, 1, 1, 1, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 1, 1, 1, 0],
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 1, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 1, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 1, 1, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 1, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 1, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 1, 1, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+					[0, 1, 1, 1, 0],
+					[0, 1, 0, 1, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 1, 0, 1, 0],
+					[0, 1, 1, 1, 0],
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 1, 1, 1, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 1, 0],
+					[0, 1, 1, 1, 0],
+					[0, 0, 0, 1, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 1, 0, 0, 0],
+					[0, 1, 1, 1, 0],
+					[0, 1, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 1, 1, 1, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 1, 1, 1, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+					[0, 1, 1, 1, 1],
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+				[
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+					[0, 0, 1, 0, 0],
+				],
+				[
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+					[1, 1, 1, 1, 1],
+					[0, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0],
+				],
+			];
+			let rand = Math.random() * options.length;
+			return options[Math.floor(rand)];
+		}
+    </script>
+  </body>
+</html>
